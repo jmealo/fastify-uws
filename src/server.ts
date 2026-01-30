@@ -1,8 +1,9 @@
 import uws from 'uWebSockets.js';
 import dns from 'node:dns/promises';
 import { METHODS } from 'node:http';
+import type { ServerOptions } from 'node:https';
 import { EventEmitter } from 'eventemitter3';
-import type { FastifyServerFactoryHandler } from 'fastify';
+import type { FastifyServerFactoryHandler, FastifyServerOptions } from 'fastify';
 import ipaddr from 'ipaddr.js';
 
 import {
@@ -30,7 +31,23 @@ import {
 } from './symbols';
 import type { WebSocketServer } from './websocket-server';
 
-function createApp() {
+interface FastifyUwsOptions extends FastifyServerOptions {
+  http2?: boolean;
+  https?: ServerOptions | null;
+}
+
+function createApp(opts: Pick<FastifyUwsOptions, 'http2' | 'https'>) {
+  if (opts.http2 && opts.https) {
+    // https: {
+    //   key: fs.readFileSync('private-key.pem'),
+    //   cert: fs.readFileSync('certificate.pem'),
+    // }
+    return uws.SSLApp({
+      key_file_name: (opts.https.key as Buffer<ArrayBuffer>).toString('utf-8'),
+      cert_file_name: (opts.https.cert as Buffer<ArrayBuffer>).toString('utf-8'),
+    });
+  }
+
   return uws.App();
 }
 
@@ -38,15 +55,10 @@ const VALID_METHODS = new Map(METHODS.map((method) => [method.toLowerCase(), met
 
 const mainServer = {};
 
-interface FastifyUwsOptions {
-  connectionTimeout?: number;
-  https?: boolean;
-}
-
 export class Server extends EventEmitter {
   [kHandler]: FastifyServerFactoryHandler;
   timeout?: number;
-  [kHttps]?: boolean | Record<string, string>;
+  [kHttps]?: FastifyUwsOptions['https'];
   [kWs]?: WebSocketServer | null;
   [kAddress]?: null | any;
   [kListenSocket]?: null | any;
@@ -58,7 +70,7 @@ export class Server extends EventEmitter {
   constructor(handler: FastifyServerFactoryHandler, opts: FastifyUwsOptions = {}) {
     super();
 
-    const { connectionTimeout = 0, https = false } = opts;
+    const { http2 = false, https = null, connectionTimeout = 0 } = opts;
 
     this[kHandler] = handler;
     this.timeout = connectionTimeout;
@@ -66,7 +78,7 @@ export class Server extends EventEmitter {
     this[kWs] = null;
     this[kAddress] = null;
     this[kListenSocket] = null;
-    this[kApp] = createApp();
+    this[kApp] = createApp({ http2, https });
     this[kClosed] = false;
   }
 

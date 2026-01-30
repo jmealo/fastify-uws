@@ -201,6 +201,34 @@ export default (async (app) => {
 }) as FastifyPluginAsyncTypebox;
 ```
 
+### TLS/SSL: `http2` and `https`
+
+```ts
+import fs from 'node:fs';
+import fastify from 'fastify';
+import { serverFactory, websocket } from 'fastify-uws';
+// [...]
+export default () => {
+  const app = fastify({
+    http2: true,
+    https: {
+      key: fs.readFileSync(process.env.HTTPS_KEY),
+      cert: fs.readFileSync(process.env.HTTPS_CERT),
+    },
+    logger: {
+      transport: {
+        target: '@fastify/one-line-logger',
+      },
+    },
+    serverFactory,
+  });
+
+  app.register(websocket);
+  // [...]
+};
+// [...]
+```
+
 ## Benchmarks
 
 ### [oha v1.4.5](https://github.com/hatoo/oha)
