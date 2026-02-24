@@ -14,6 +14,7 @@ import type {
   RawServerDefault,
   RequestGenericInterface,
 } from 'fastify';
+import type { SSEContext } from './plugin-sse';
 import { Server } from './server';
 import { Request } from './request';
 import { Response } from './response';
@@ -47,17 +48,41 @@ export const serverFactory: FastifyServerFactory<any> = (handler, options) => {
   return new Server(handler as any, options);
 };
 
+export type { SSEContext } from './plugin-sse';
+export { default as sse } from './plugin-sse';
 export { default as websocket } from './plugin-websocket';
 export { UwsWebSocket as WebSocket, WebSocketServer, WebSocketStream, Server, Request, Response };
 
 declare module 'fastify' {
+  interface FastifyReply {
+    sse: SSEContext;
+  }
+
   interface RouteOptions {
     websocket?: boolean;
+    sse?:
+      | boolean
+      | {
+          heartbeat?: boolean;
+          serializer?: (data: any) => string;
+        };
+    ws?: {
+      topics?: string[];
+    };
   }
 
   // biome-ignore lint/correctness/noUnusedVariables: must match Fastify's type parameter name for declaration merging
   interface RouteShorthandOptions<RawServer extends RawServerBase = RawServerDefault> {
     websocket?: boolean;
+    sse?:
+      | boolean
+      | {
+          heartbeat?: boolean;
+          serializer?: (data: any) => string;
+        };
+    ws?: {
+      topics?: string[];
+    };
   }
 
   interface RouteShorthandMethod<
