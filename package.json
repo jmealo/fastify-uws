@@ -1,11 +1,14 @@
 {
-  "name": "fastify-uws",
+  "name": "@jmealo/fastify-uws",
   "version": "1.0.2",
   "description": "A performant HTTP and WebSocket server for Fastify with uWebSockets.",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "dist"
   ],

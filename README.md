@@ -6,16 +6,16 @@ A performant HTTP and WebSocket server for Fastify with [uWebSockets](https://gi
 
 ## Installation
 
-Install `fastify-uws` with your favorite package manager:
+Install `@jmealo/fastify-uws` with your favorite package manager:
 
 ```sh
-$ npm i fastify-uws
+$ npm i @jmealo/fastify-uws
 # or
-$ yarn add fastify-uws
+$ yarn add @jmealo/fastify-uws
 # or
-$ pnpm i fastify-uws
+$ pnpm i @jmealo/fastify-uws
 # or
-$ bun add fastify-uws
+$ bun add @jmealo/fastify-uws
 ```
 
 ## Supported
@@ -41,7 +41,7 @@ Just two lines are needed to speed up your Fastify application.
 ```ts
 // app.ts
 import fastify from 'fastify';
-import { serverFactory } from 'fastify-uws'; // Import here
+import { serverFactory } from '@jmealo/fastify-uws'; // Import here
 
 import router from '~/plugins/router';
 
@@ -151,12 +151,12 @@ Just a single line of change can speed up your WebSocket application in Fastify.
 
 ```diff
 - import websocket from '@fastify/websocket';
-+ import { websocket } from 'fastify-uws';
++ import { websocket } from '@jmealo/fastify-uws';
 ```
 
 ```ts
 // app.ts
-import { websocket } from 'fastify-uws';
+import { websocket } from '@jmealo/fastify-uws';
 
 app.register(websocket);
 ```
@@ -214,7 +214,7 @@ export default (async (app) => {
 ```ts
 import fs from 'node:fs';
 import fastify from 'fastify';
-import { serverFactory, websocket } from 'fastify-uws';
+import { serverFactory, websocket } from '@jmealo/fastify-uws';
 // [...]
 export default () => {
   const app = fastify({
