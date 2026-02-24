@@ -16,12 +16,20 @@ const defaultWebSocketConfig = {
 const SEP = '!';
 const SEP_BUFFER = Buffer.from(SEP);
 
+export interface WsUserData {
+  req: Request;
+  handler: (ws: uws.WebSocket<WsUserData>) => void;
+  websocket?: WebSocket;
+}
+
 export class WebSocket extends EventEmitter {
   namespace: Buffer;
-  connection: uws.WebSocket<any>;
+  connection: uws.WebSocket<WsUserData>;
+  topics: Record<string, Buffer>;
+  [kEnded]: boolean;
 
   static allocTopic(namespace: Buffer, topic: Buffer | string) {
-    if (topic[kTopic]) return topic;
+    if ((topic as any)[kTopic]) return topic;
 
     const buf = Buffer.concat([
       namespace,
@@ -29,16 +37,20 @@ export class WebSocket extends EventEmitter {
       Buffer.isBuffer(topic) ? topic : Buffer.from(topic),
     ]);
 
-    buf[kTopic] = true;
+    (buf as any)[kTopic] = true;
     return buf;
   }
 
-  constructor(namespace, connection, topics = {}) {
+  constructor(
+    namespace: Buffer,
+    connection: uws.WebSocket<WsUserData>,
+    topics: Record<string, Buffer> = {},
+  ) {
     super();
 
     this.namespace = namespace;
     this.connection = connection;
-    connection.websocket = this;
+    (connection as unknown as WsUserData).websocket = this;
     this.topics = topics; // we maintain a cache of buffer topics
     this[kEnded] = false;
   }
@@ -48,7 +60,7 @@ export class WebSocket extends EventEmitter {
   }
 
   allocTopic(topic: Buffer | string) {
-    if (this.topics[topic]) return this.topics[topic];
+    if (this.topics[topic as string]) return this.topics[topic as string];
     return WebSocket.allocTopic(this.namespace, topic);
   }
 
@@ -137,19 +149,19 @@ export class WebSocketStream extends Duplex {
 
     super({
       highWaterMark: opts.highWaterMark,
-      mapReadable: (packet) => {
+      mapReadable: (packet: any) => {
         if (opts.mapReadable) return opts.mapReadable(packet);
         return packet.data;
       },
-      byteLengthReadable: (packet) => {
+      byteLengthReadable: (packet: any) => {
         if (opts.byteLengthReadable) return opts.byteLengthReadable(packet);
         return packet.isBinary ? packet.data.byteLength : 1024;
       },
-      mapWritable: (data) => {
+      mapWritable: (data: any) => {
         if (opts.mapWritable) return opts.mapWritable(data);
         return { data, isBinary: Buffer.isBuffer(data), compress };
       },
-      byteLengthWritable: (packet) => {
+      byteLengthWritable: (packet: any) => {
         if (opts.byteLengthWritable) return opts.byteLengthWritable(packet);
         return packet.isBinary ? packet.data.byteLength : 1024;
       },
@@ -159,22 +171,22 @@ export class WebSocketStream extends Duplex {
     this._onMessage = this._onMessage.bind(this);
   }
 
-  _open(cb) {
+  _open(cb: () => void) {
     this.socket.on('message', this._onMessage);
     cb();
   }
 
-  _close(cb) {
+  _close(cb: () => void) {
     this.socket.off('message', this._onMessage);
     this.socket.close();
     cb();
   }
 
-  _onMessage(data, isBinary) {
+  _onMessage(data: any, isBinary: boolean) {
     this.push({ data, isBinary });
   }
 
-  _write(packet, cb) {
+  _write(packet: any, cb: () => void) {
     this.socket.send(packet.data, packet.isBinary, packet.compress);
     cb();
   }
@@ -191,9 +203,12 @@ type WSOptions = {
 };
 
 export class WebSocketServer extends EventEmitter {
+  options: WSOptions & typeof defaultWebSocketConfig;
+  connections: Set<uws.WebSocket<WsUserData>>;
+
   constructor(options: WSOptions = {}) {
     super();
-    this.options = { ...options, ...defaultWebSocketConfig };
+    this.options = { ...defaultWebSocketConfig, ...options };
     this.connections = new Set();
   }
 
@@ -202,46 +217,54 @@ export class WebSocketServer extends EventEmitter {
     const app: uws.TemplatedApp = server[kApp];
     const listenerHandler = server[kHandler];
 
-    app.ws('/*', {
-      upgrade: async (res, req, context) => {
+    app.ws<WsUserData>('/*', {
+      upgrade: (res, req, context) => {
         const method = req.getMethod().toUpperCase();
         const socket = new HTTPSocket(server, res, method === 'GET' || method === 'HEAD');
         const request = new Request(req, socket, method);
         const response = new Response(socket);
         request[kWs] = context;
         server.emit('upgrade', request, socket);
-        listenerHandler(request, response);
+        listenerHandler(request as any, response as any);
       },
       open: (ws) => {
         this.connections.add(ws);
-        ws.handler(ws);
+        (ws as unknown as WsUserData).handler(ws);
         this.emit('open', ws);
       },
       close: (ws, code: number, message) => {
         this.connections.delete(ws);
-        ws.websocket[kEnded] = true;
-        ws.req.socket.destroy();
-        const _message = message instanceof ArrayBuffer ? Buffer.from(message) : message;
-        ws.websocket.emit('close', code, _message);
+        const userData = ws as unknown as WsUserData;
+        const websocket = userData.websocket;
+        if (websocket) {
+          websocket[kEnded] = true;
+        }
+        userData.req.socket.destroy();
+        const _message =
+          message instanceof ArrayBuffer ? Buffer.copyBytesFrom(new Uint8Array(message)) : message;
+        websocket?.emit('close', code, _message);
         this.emit('close', ws, code, _message);
       },
-      drain: (ws: uws.WebSocket<any>) => {
-        ws.websocket.emit('drain');
+      drain: (ws) => {
+        (ws as unknown as WsUserData).websocket?.emit('drain');
         this.emit('drain', ws);
       },
       message: (ws, message, isBinary) => {
-        const _message = message instanceof ArrayBuffer ? Buffer.from(message) : message;
-        ws.websocket.emit('message', _message, isBinary);
+        const _message =
+          message instanceof ArrayBuffer ? Buffer.copyBytesFrom(new Uint8Array(message)) : message;
+        (ws as unknown as WsUserData).websocket?.emit('message', _message, isBinary);
         this.emit('message', ws, _message, isBinary);
       },
       ping: (ws, message) => {
-        const _message = message instanceof ArrayBuffer ? Buffer.from(message) : message;
-        ws.websocket.emit('ping', _message);
+        const _message =
+          message instanceof ArrayBuffer ? Buffer.copyBytesFrom(new Uint8Array(message)) : message;
+        (ws as unknown as WsUserData).websocket?.emit('ping', _message);
         this.emit('ping', ws, _message);
       },
       pong: (ws, message) => {
-        const _message = message instanceof ArrayBuffer ? Buffer.from(message) : message;
-        ws.websocket.emit('pong', _message);
+        const _message =
+          message instanceof ArrayBuffer ? Buffer.copyBytesFrom(new Uint8Array(message)) : message;
+        (ws as unknown as WsUserData).websocket?.emit('pong', _message);
         this.emit('pong', ws, _message);
       },
       ...options,

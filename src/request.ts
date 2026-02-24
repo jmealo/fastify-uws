@@ -2,21 +2,21 @@ import type uws from 'uWebSockets.js';
 import { Readable } from 'streamx';
 
 import type { HTTPSocket } from './http-socket';
-import { kHeaders, kReq, kUrl } from './symbols';
+import { kHeaders, kUrl, kWs } from './symbols';
 
 const noop = () => {};
 
-function onAbort() {
-  this.emit('aborted');
+function onAbort(this: Request) {
+  (this as any).emit('aborted');
 }
 export class Request extends Readable {
   socket: HTTPSocket;
   method: string;
   httpVersion: string;
   readableEnded: boolean;
-  [kReq]: uws.HttpRequest;
-  [kUrl]: string | null;
-  [kHeaders]: Record<string, string> | null;
+  [kUrl]: string;
+  [kHeaders]: Record<string, string>;
+  [kWs]?: uws.us_socket_context_t;
 
   constructor(req: uws.HttpRequest, socket: HTTPSocket, method: string) {
     super();
@@ -25,10 +25,17 @@ export class Request extends Readable {
     this.method = method;
     this.httpVersion = '1.1';
     this.readableEnded = false;
-    this[kReq] = req;
-    this[kUrl] = null;
-    this[kHeaders] = null;
 
+    // Eagerly cache url and headers - uWS invalidates HttpRequest after handler returns
+    const query = req.getQuery();
+    this[kUrl] = req.getUrl() + (query && query.length > 0 ? `?${query}` : '');
+    const headers: Record<string, string> = {};
+    req.forEach((k, v) => {
+      headers[k] = v;
+    });
+    this[kHeaders] = headers;
+
+    // Prevent unhandled 'error' event crash — errors propagate via destroy chain
     this.once('error', noop);
     const destroy = super.destroy.bind(this);
     socket.once('error', destroy);
@@ -41,11 +48,7 @@ export class Request extends Readable {
   }
 
   get url() {
-    let url = this[kUrl];
-    if (url) return url;
-    const query = this[kReq].getQuery();
-    url = this[kUrl] = this[kReq].getUrl() + (query && query.length > 0 ? `?${query}` : '');
-    return url;
+    return this[kUrl];
   }
 
   set url(url) {
@@ -53,33 +56,28 @@ export class Request extends Readable {
   }
 
   get headers() {
-    let headers = this[kHeaders];
-    if (headers) return headers;
-    headers = this[kHeaders] = {};
-    this[kReq].forEach((k, v) => {
-      headers[k] = v;
-    });
-    return headers;
+    return this[kHeaders];
   }
 
-  setEncoding(encoding) {
+  setEncoding(encoding: string) {
     this.socket.setEncoding(encoding);
   }
 
-  setTimeout(timeout) {
+  setTimeout(timeout: number) {
     this.socket.setTimeout(timeout);
   }
 
-  destroy(err) {
+  destroy(err?: Error) {
     if (this.destroyed || this.destroying) return;
     this.socket.destroy(err);
   }
 
-  unpipe(writable) {
+  unpipe(writable: any) {
+    // Intentionally more aggressive than Node.js — destroy writable to prevent stale uWS response references
     writable.destroy();
   }
 
-  _read(cb) {
+  _read(cb: (err?: Error | null) => void) {
     if (this.destroyed || this.destroying || this.socket.destroyed) return cb();
 
     this.socket.onRead((err, data) => {

@@ -22,13 +22,14 @@
     }
   },
   "scripts": {
+    "bench": "node benchmarks/compare/run.js",
     "build": "vite build",
     "check": "biome check --write",
     "test": "vitest run"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Vanilla-IceCream/fastify-uws.git"
+    "url": "git+https://github.com/jmealo/fastify-uws.git"
   },
   "keywords": [
     "fastify",
@@ -36,11 +37,14 @@
     "uWebSockets"
   ],
   "author": "Vanilla IceCream",
+  "contributors": [
+    "Jeff Mealo"
+  ],
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/Vanilla-IceCream/fastify-uws/issues"
+    "url": "https://github.com/jmealo/fastify-uws/issues"
   },
-  "homepage": "https://github.com/Vanilla-IceCream/fastify-uws#readme",
+  "homepage": "https://github.com/jmealo/fastify-uws#readme",
   "dependencies": {
     "@fastify/error": "^4.2.0",
     "@types/ws": "^8.18.1",
@@ -67,6 +71,7 @@
     "vite": "^7.3.1",
     "vite-plugin-dts": "^4.5.4",
     "vitest": "^4.0.17",
+    "autocannon": "^8.0.0",
     "ws": "^8.19.0"
   }
 }

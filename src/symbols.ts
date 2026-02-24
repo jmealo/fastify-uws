@@ -1,5 +1,4 @@
 export const kHttps = Symbol('uws.https');
-export const kReq = Symbol('uws.req');
 export const kRes = Symbol('uws.res');
 export const kServer = Symbol('uws.server');
 export const kHeaders = Symbol('uws.headers');
@@ -25,3 +24,4 @@ export const kWebSocketOptions = Symbol('uws.webSocketOptions');
 export const kListenAll = Symbol('uws.listenAll');
 export const kListening = Symbol('uws.listening');
 export const kClientError = Symbol('uws.clientError');
+export const kTempFiles = Symbol('uws.tempFiles');

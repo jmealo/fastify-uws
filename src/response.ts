@@ -18,27 +18,25 @@ class Header {
 }
 
 const EMPTY = Buffer.alloc(0);
-class HTTPResponse {
-  chunk: Buffer;
-  end: boolean;
-  byteLength: number;
 
-  constructor(chunk?: Buffer | null, end = false) {
-    this.chunk = chunk || EMPTY;
-    this.empty = !chunk;
-    this.end = end;
-    this.byteLength = this.empty ? 1 : Buffer.byteLength(this.chunk);
-  }
+function httpResponse(chunk?: any, end = false) {
+  if (!chunk) return { chunk: EMPTY, empty: true, end, byteLength: 0 };
+  return {
+    chunk,
+    empty: false,
+    end,
+    byteLength: Buffer.isBuffer(chunk) ? chunk.byteLength : Buffer.byteLength(chunk),
+  };
 }
 
-function onAbort() {
-  this.emit('aborted');
+function onAbort(this: Response) {
+  (this as any).emit('aborted');
 }
 
 const noop = () => {};
 
 const options = {
-  byteLength(data) {
+  byteLength(data: { byteLength: number }): number {
     return data.byteLength;
   },
 };
@@ -52,6 +50,7 @@ export class Response extends Writable {
   contentLength: number | null;
   writableEnded: boolean;
   firstChunk: boolean;
+  _boundEmitDrain: () => void;
   [kHeaders]: Map<string, Header>;
 
   constructor(socket: HTTPSocket) {
@@ -64,10 +63,12 @@ export class Response extends Writable {
     this.contentLength = null;
     this.writableEnded = false;
     this.firstChunk = true;
+    this._boundEmitDrain = this._emitDrain.bind(this);
 
     this[kHeaders] = new Map();
 
     const destroy = this.destroy.bind(this);
+    // Prevent unhandled 'error' event crash — errors propagate via destroy chain
     this.once('error', noop);
     socket.once('error', destroy);
     socket.once('close', destroy);
@@ -101,14 +102,16 @@ export class Response extends Writable {
   getHeaders() {
     const headers = {} as Record<string, string>;
     this[kHeaders].forEach((header, key) => {
-      headers[key] = header.value;
+      headers[key] = header.value as string;
     });
     return headers;
   }
 
-  setHeader(name: string, value) {
+  setHeader(name: string, value: string | string[] | number) {
     if (this.headersSent) throw new ERR_HEAD_SET();
 
+    // Sanitize CRLF from header name to prevent injection
+    name = name.replace(/[\r\n]/g, '');
     const key = name.toLowerCase();
 
     if (key === 'content-length') {
@@ -117,8 +120,15 @@ export class Response extends Writable {
     }
 
     if (key === 'transfer-encoding') {
-      this.chunked = value.includes('chunked');
+      this.chunked = (value as string).includes('chunked');
       return;
+    }
+
+    // Sanitize CRLF from header value to prevent injection
+    if (typeof value === 'string') {
+      value = value.replace(/[\r\n]/g, '');
+    } else if (Array.isArray(value)) {
+      value = value.map((v) => (typeof v === 'string' ? v.replace(/[\r\n]/g, '') : v));
     }
 
     this[kHeaders].set(key, new Header(name, value));
@@ -130,7 +140,11 @@ export class Response extends Writable {
     this[kHeaders].delete(name.toLowerCase());
   }
 
-  writeHead(statusCode, statusMessage, headers) {
+  writeHead(
+    statusCode: number,
+    statusMessage?: string | Record<string, any>,
+    headers?: Record<string, any>,
+  ) {
     if (this.headersSent) throw new ERR_HEAD_SET();
 
     this.statusCode = statusCode;
@@ -138,7 +152,9 @@ export class Response extends Writable {
     if (typeof statusMessage === 'object') {
       headers = statusMessage;
     } else if (statusMessage) {
-      this.statusMessage = statusMessage;
+      // Sanitize CRLF to prevent status line injection
+      this.statusMessage =
+        typeof statusMessage === 'string' ? statusMessage.replace(/[\r\n]/g, '') : statusMessage;
     }
 
     if (headers) {
@@ -148,38 +164,68 @@ export class Response extends Writable {
     }
   }
 
-  end(data) {
-    if (this.aborted) return;
+  end(data?: any, _?: any, callback?: () => void) {
+    if (typeof data === 'function') {
+      callback = data;
+      data = undefined;
+    } else if (typeof _ === 'function') {
+      callback = _;
+    }
+    if (this.aborted) {
+      if (callback) process.nextTick(callback);
+      return;
+    }
     if (this.destroyed) throw new ERR_STREAM_DESTROYED();
     this.writableEnded = true;
-    return super.end(new HTTPResponse(data, true));
+    if (callback) this.once('finish', callback);
+    return super.end(httpResponse(data, true));
   }
 
-  destroy(err) {
+  addTrailers() {
+    // no-op: uWS does not support trailers
+  }
+
+  destroy(err?: Error) {
     if (this.destroyed || this.destroying || this.aborted) return;
     this.socket.destroy(err);
   }
 
-  write(data) {
-    if (this.aborted) return;
-
+  write(data: any): boolean {
+    if (this.aborted) return false;
     if (this.destroyed) throw new ERR_STREAM_DESTROYED();
 
-    data = new HTTPResponse(data);
+    const resp = httpResponse(data);
 
-    // fast end
-    if (this.firstChunk && this.contentLength !== null && this.contentLength === data.byteLength) {
-      data.end = true;
+    // Content-length fast-end: single chunk matches expected length
+    if (this.firstChunk && this.contentLength !== null && this.contentLength === resp.byteLength) {
+      resp.end = true;
       this.writableEnded = true;
-      super.end(data);
+      super.end(resp);
       return true;
     }
 
     this.firstChunk = false;
-    return super.write(data);
+
+    // Ensure headers are queued for the socket
+    if (!this.headersSent) {
+      this.headersSent = true;
+      this.socket[kHead] = {
+        headers: this[kHeaders],
+        status: this.status,
+      };
+    }
+
+    // Fast path: write directly to socket, bypassing streamx queue.
+    // The drain callback emits 'drain' on this Response when backpressure clears.
+    this.socket.write(resp, null, this._boundEmitDrain);
+    return !this.socket.writableNeedDrain;
   }
 
-  _write(data, cb) {
+  _emitDrain() {
+    this.emit('drain');
+  }
+
+  _write(data: any, cb: (err?: Error | null) => void) {
     if (this.aborted) return cb();
 
     if (!this.headersSent) {
@@ -198,7 +244,7 @@ export class Response extends Writable {
     this.socket.write(data, null, cb);
   }
 
-  _destroy(cb) {
+  _destroy(cb: (err?: Error | null) => void) {
     if (this.socket.destroyed) return cb();
     this.socket.once('close', cb);
   }

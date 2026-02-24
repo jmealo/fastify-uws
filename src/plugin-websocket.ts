@@ -1,14 +1,15 @@
 import fp from 'fastify-plugin';
 
 import { kRes, kWs } from './symbols';
+import type { WsUserData } from './websocket-server';
 import { WebSocket, WebSocketServer } from './websocket-server';
 
-function defaultErrorHandler(err, request) {
+function defaultErrorHandler(err: Error, conn: WebSocket, request: any) {
   request.log.error(err);
-  request.raw.destroy(err);
+  conn.close();
 }
 
-function fastifyUws(fastify, opts, next) {
+function fastifyUws(fastify: any, opts: any, next: (err?: Error) => void) {
   const { server } = fastify;
   const { errorHandler = defaultErrorHandler, options } = opts;
 
@@ -21,7 +22,7 @@ function fastifyUws(fastify, opts, next) {
 
   fastify.decorate('websocketServer', websocketServer);
 
-  fastify.addHook('onRoute', (routeOptions) => {
+  fastify.addHook('onRoute', (routeOptions: any) => {
     const isWebSocket = !!routeOptions.websocket;
     if (!isWebSocket || routeOptions.method === 'HEAD' || routeOptions.method === 'OPTIONS') return;
 
@@ -29,16 +30,21 @@ function fastifyUws(fastify, opts, next) {
     const handler = routeOptions.handler;
     const namespace = Buffer.from(routeOptions.url);
 
-    const topics = {};
+    const topics: Record<string, Buffer> = {};
     if (wsOptions.topics) {
       for (const topic of wsOptions.topics) {
-        topics[topic] = WebSocket.allocTopic(namespace, topic);
+        topics[topic] = WebSocket.allocTopic(namespace, topic) as Buffer;
       }
     }
 
-    routeOptions.handler = function (request, reply) {
+    routeOptions.handler = function (this: any, request: any, reply: any) {
       const requestRaw = request.raw;
       if (requestRaw[kWs]) {
+        const wsKey = requestRaw.headers['sec-websocket-key'];
+        if (!wsKey) {
+          reply.code(400).send('Missing sec-websocket-key header');
+          return;
+        }
         reply.hijack();
         const uRes = requestRaw.socket[kRes];
         requestRaw.socket[kWs] = true;
@@ -46,23 +52,17 @@ function fastifyUws(fastify, opts, next) {
         uRes.upgrade(
           {
             req: requestRaw,
-            handler: (ws) => {
+            handler: (ws: any) => {
               const conn = new WebSocket(namespace, ws, topics);
 
               let result: any;
               try {
-                // request.log.info('fastify-uws: websocket connection opened');
-
-                // conn.once('close', () => {
-                //   request.log.info('fastify-uws: websocket connection closed');
-                // });
-
                 requestRaw.once('error', () => {
                   conn.close();
                 });
 
                 requestRaw.once('close', () => {
-                  conn.end();
+                  conn.end(1000, 'Normal Closure');
                 });
 
                 result = handler.call(this, conn, request, reply);
@@ -71,10 +71,10 @@ function fastifyUws(fastify, opts, next) {
               }
 
               if (result && typeof result.catch === 'function') {
-                result.catch((err) => errorHandler.call(this, err, conn, request, reply));
+                result.catch((err: any) => errorHandler.call(this, err, conn, request, reply));
               }
             },
-          },
+          } as WsUserData,
           requestRaw.headers['sec-websocket-key'],
           requestRaw.headers['sec-websocket-protocol'],
           requestRaw.headers['sec-websocket-extensions'],

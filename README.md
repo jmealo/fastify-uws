@@ -231,6 +231,36 @@ export default () => {
 
 ## Benchmarks
 
+### Quick Comparison
+
+> Measured with `pnpm bench` — autocannon, 100 connections, 10s duration, pipelining 10
+
+#### HTTP — `GET /ping` → `{ ok: true }`
+
+| | Req/sec | Latency (mean) | Latency (p99) |
+| :--- | ---: | ---: | ---: |
+| fastify | 93,000 | 10.3 ms | 26 ms |
+| **fastify-uws** | **200,000** | **4.6 ms** | **9 ms** |
+| | **+115%** | **-55%** | **-65%** |
+
+#### WebSocket — 100 clients, 64B echo flood, 10s
+
+| | Messages/sec |
+| :--- | ---: |
+| @fastify/websocket (ws) | 91,000 |
+| **fastify-uws** | **94,000** |
+| | **+3%** |
+
+#### SSE — 100 clients, 64B events, 10s
+
+| | Events/sec |
+| :--- | ---: |
+| @fastify/sse (default) | 420,000 |
+| **@fastify/sse + fastify-uws** | **197,000** |
+| | **-53%** |
+
+> Results vary by machine. Run `pnpm bench` to reproduce.
+
 ### [oha v1.4.5](https://github.com/hatoo/oha)
 
 ```sh

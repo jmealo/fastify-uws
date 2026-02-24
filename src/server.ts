@@ -1,7 +1,10 @@
 import uws from 'uWebSockets.js';
 import dns from 'node:dns/promises';
+import fs from 'node:fs';
 import { METHODS } from 'node:http';
 import type { ServerOptions } from 'node:https';
+import os from 'node:os';
+import path from 'node:path';
 import { EventEmitter } from 'eventemitter3';
 import type { FastifyServerFactoryHandler, FastifyServerOptions } from 'fastify';
 import ipaddr from 'ipaddr.js';
@@ -27,6 +30,7 @@ import {
   kListenAll,
   kListening,
   kListenSocket,
+  kTempFiles,
   kWs,
 } from './symbols';
 import type { WebSocketServer } from './websocket-server';
@@ -36,24 +40,70 @@ interface FastifyUwsOptions extends FastifyServerOptions {
   https?: ServerOptions | null;
 }
 
-function createApp(opts: Pick<FastifyUwsOptions, 'http2' | 'https'>) {
-  if (opts.http2 && opts.https) {
-    // https: {
-    //   key: fs.readFileSync('private-key.pem'),
-    //   cert: fs.readFileSync('certificate.pem'),
-    // }
-    return uws.SSLApp({
-      key_file_name: (opts.https.key as Buffer<ArrayBuffer>).toString('utf-8'),
-      cert_file_name: (opts.https.cert as Buffer<ArrayBuffer>).toString('utf-8'),
-    });
+function resolveFileOrBuffer(
+  value: string | Buffer | string[] | Buffer[] | undefined,
+  label: string,
+  tempFiles: string[],
+): string | undefined {
+  if (value === undefined || value === null) return undefined;
+
+  // Unwrap single-element arrays; reject multi-element (uWS limitation)
+  if (Array.isArray(value)) {
+    if (value.length === 0) return undefined;
+    if (value.length > 1) {
+      throw new Error(`fastify-uws: multiple ${label} values are not supported by uWebSockets.js`);
+    }
+    value = value[0];
   }
 
-  return uws.App();
+  if (typeof value === 'string') return value;
+  if (Buffer.isBuffer(value)) {
+    const tmp = path.join(os.tmpdir(), `fastify-uws-${label}-${process.pid}-${Date.now()}.pem`);
+    fs.writeFileSync(tmp, value, { mode: 0o600 });
+    tempFiles.push(tmp);
+    return tmp;
+  }
+  return undefined;
+}
+
+function createApp(opts: Pick<FastifyUwsOptions, 'http2' | 'https'>): {
+  app: uws.TemplatedApp;
+  tempFiles: string[];
+} {
+  if (opts.https) {
+    const tempFiles: string[] = [];
+    const keyPath = resolveFileOrBuffer(
+      opts.https.key as string | Buffer | string[] | Buffer[] | undefined,
+      'key',
+      tempFiles,
+    );
+    const certPath = resolveFileOrBuffer(
+      opts.https.cert as string | Buffer | string[] | Buffer[] | undefined,
+      'cert',
+      tempFiles,
+    );
+    const caPath = resolveFileOrBuffer(
+      opts.https.ca as string | Buffer | string[] | Buffer[] | undefined,
+      'ca',
+      tempFiles,
+    );
+
+    const sslOpts: Record<string, string> = {};
+    if (keyPath) sslOpts.key_file_name = keyPath;
+    if (certPath) sslOpts.cert_file_name = certPath;
+    if (caPath) sslOpts.ca_file_name = caPath;
+    if (opts.https.passphrase) sslOpts.passphrase = opts.https.passphrase as string;
+
+    return { app: uws.SSLApp(sslOpts), tempFiles };
+  }
+
+  return { app: uws.App(), tempFiles: [] };
 }
 
 const VALID_METHODS = new Map(METHODS.map((method) => [method.toLowerCase(), method]));
 
-const mainServer = {};
+// Port → Server map for WebSocket server sharing across Fastify instances on the same port
+const mainServer: Record<number, Server> = {};
 
 export class Server extends EventEmitter {
   [kHandler]: FastifyServerFactoryHandler;
@@ -66,6 +116,7 @@ export class Server extends EventEmitter {
   [kClosed]?: boolean;
   [kListenAll]?: boolean;
   [kListening]?: boolean;
+  [kTempFiles]: string[];
 
   constructor(handler: FastifyServerFactoryHandler, opts: FastifyUwsOptions = {}) {
     super();
@@ -78,7 +129,9 @@ export class Server extends EventEmitter {
     this[kWs] = null;
     this[kAddress] = null;
     this[kListenSocket] = null;
-    this[kApp] = createApp({ http2, https });
+    const { app, tempFiles } = createApp({ http2, https });
+    this[kApp] = app;
+    this[kTempFiles] = tempFiles;
     this[kClosed] = false;
   }
 
@@ -98,17 +151,21 @@ export class Server extends EventEmitter {
     return this[kAddress];
   }
 
-  listen(listenOptions: { host: string; port: number; signal: AbortSignal }, cb) {
+  listen(listenOptions: { host: string; port: number; signal?: AbortSignal }, cb?: () => void) {
     if (listenOptions?.signal) {
-      listenOptions.signal.addEventListener('abort', () => {
-        this.close();
-      });
+      listenOptions.signal.addEventListener(
+        'abort',
+        () => {
+          this.close();
+        },
+        { once: true },
+      );
     }
 
     this[kListen](listenOptions)
       .then(() => {
-        cb?.();
         this[kListening] = true;
+        cb?.();
         this.emit('listening');
       })
       .catch((err) => {
@@ -118,18 +175,17 @@ export class Server extends EventEmitter {
   }
 
   closeIdleConnections() {
-    this.close();
+    // no-op: uWS manages connections internally
   }
 
   close(cb = () => {}) {
-    this[kAddress] = null;
-    this[kListening] = false;
     if (this[kClosed]) return cb();
     const port = this[kAddress]?.port;
     if (port !== undefined && mainServer[port] === this) {
       delete mainServer[port];
     }
     this[kAddress] = null;
+    this[kListening] = false;
     this[kClosed] = true;
     if (this[kListenSocket]) {
       uws.us_listen_socket_close(this[kListenSocket]);
@@ -140,6 +196,12 @@ export class Server extends EventEmitter {
         conn.close();
       }
     }
+    for (const f of this[kTempFiles]) {
+      try {
+        fs.unlinkSync(f);
+      } catch {}
+    }
+    this[kTempFiles] = [];
     process.nextTick(() => {
       this.emit('close');
       cb();
@@ -150,14 +212,14 @@ export class Server extends EventEmitter {
 
   unref() {}
 
-  async [kListen]({ port, host }) {
+  async [kListen]({ port: rawPort, host }: { port?: number; host: string }) {
     if (this[kClosed]) throw new ERR_SERVER_DESTROYED();
 
-    if (port !== undefined && port !== null && Number.isNaN(Number(port))) {
-      throw new ERR_SOCKET_BAD_PORT(port);
+    if (rawPort !== undefined && rawPort !== null && Number.isNaN(Number(rawPort))) {
+      throw new ERR_SOCKET_BAD_PORT(rawPort);
     }
 
-    port = port === undefined || port === null ? 0 : Number(port);
+    let port: number = rawPort === undefined || rawPort === null ? 0 : Number(rawPort);
 
     const lookupAddress = await dns.lookup(host);
 
@@ -189,7 +251,7 @@ export class Server extends EventEmitter {
       if (request.headers.upgrade) {
         this.emit('upgrade', request, socket);
       }
-      this[kHandler](request, response);
+      this[kHandler](request as any, response as any);
     };
 
     app.any('/*', onRequest);
@@ -202,8 +264,8 @@ export class Server extends EventEmitter {
       this[kWs].addServer(this);
     }
 
-    return new Promise((resolve, reject) => {
-      const onListen = (listenSocket) => {
+    return new Promise<void>((resolve, reject) => {
+      const onListen = (listenSocket: uws.us_listen_socket | false) => {
         if (!listenSocket) return reject(new ERR_ADDRINUSE(this[kAddress].address, port));
         this[kListenSocket] = listenSocket;
         port = this[kAddress].port = uws.us_socket_local_port(listenSocket);
