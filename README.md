@@ -26,6 +26,14 @@ $ bun add fastify-uws
 - `fastify`: v5.x
 - `@fastify/websocket`: v11.x
 
+## Release (CD)
+
+GitHub Actions publishes to npm on semver tags (`v*.*.*`) via [cd.yml](./.github/workflows/cd.yml).
+
+Required repository secret:
+
+- `NPM_TOKEN`: npm automation token with publish access
+
 ## Usage
 
 Just two lines are needed to speed up your Fastify application.
