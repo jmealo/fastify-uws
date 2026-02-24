@@ -28,11 +28,16 @@ $ bun add @jmealo/fastify-uws
 
 ## Release (CD)
 
-GitHub Actions publishes to npm on semver tags (`v*.*.*`) via [cd.yml](./.github/workflows/cd.yml).
+GitHub Actions publishes to npm on semver tags (`v*.*.*`) via [cd.yml](./.github/workflows/cd.yml) using npm Trusted Publishing (OIDC).
 
-Required repository secret:
+One-time npm setup (no `NPM_TOKEN` secret needed):
 
-- `NPM_TOKEN`: npm automation token with publish access
+- npm package: `@jmealo/fastify-uws`
+- npm trusted publisher:
+  - Owner: `jmealo`
+  - Repository: `jmealo/fastify-uws`
+  - Workflow file: `.github/workflows/cd.yml`
+  - Environment: leave empty unless you deliberately scope to a GitHub Environment
 
 ## Usage
 

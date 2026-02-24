@@ -22,11 +22,11 @@ jobs:
           node-version: 22
           cache: pnpm
           registry-url: https://registry.npmjs.org
+      - name: Use npm 11 for trusted publishing
+        run: npm i -g npm@^11.5.1
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
       - run: pnpm run test:coverage
       - run: pnpm run build
       - name: Publish to npm
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
