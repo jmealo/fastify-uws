@@ -29,10 +29,6 @@ function httpResponse(chunk?: any, end = false) {
   };
 }
 
-function onAbort(this: Response) {
-  (this as any).emit('aborted');
-}
-
 const noop = () => {};
 
 const options = {
@@ -43,13 +39,13 @@ const options = {
 
 export class Response extends Writable {
   socket: HTTPSocket;
-  statusCode: number;
+  statusCode = 200;
   statusMessage?: string;
-  headersSent: boolean;
-  chunked: boolean;
-  contentLength: number | null;
-  writableEnded: boolean;
-  firstChunk: boolean;
+  headersSent = false;
+  chunked = false;
+  contentLength: number | null = null;
+  writableEnded = false;
+  firstChunk = true;
   _boundEmitDrain: () => void;
   [kHeaders]: Map<string, Header>;
 
@@ -57,12 +53,6 @@ export class Response extends Writable {
     super(options);
 
     this.socket = socket;
-    this.statusCode = 200;
-    this.headersSent = false;
-    this.chunked = false;
-    this.contentLength = null;
-    this.writableEnded = false;
-    this.firstChunk = true;
     this._boundEmitDrain = this._emitDrain.bind(this);
 
     this[kHeaders] = new Map();
@@ -72,7 +62,9 @@ export class Response extends Writable {
     this.once('error', noop);
     socket.once('error', destroy);
     socket.once('close', destroy);
-    socket.once('aborted', onAbort.bind(this));
+    socket.once('aborted', () => {
+      this.emit('aborted' as any);
+    });
   }
 
   get aborted() {
@@ -116,12 +108,12 @@ export class Response extends Writable {
 
     if (key === 'content-length') {
       this.contentLength = Number(value);
-      return;
+      return this;
     }
 
     if (key === 'transfer-encoding') {
-      this.chunked = (value as string).includes('chunked');
-      return;
+      this.chunked = String(value).includes('chunked');
+      return this;
     }
 
     // Sanitize CRLF from header value to prevent injection
@@ -132,6 +124,7 @@ export class Response extends Writable {
     }
 
     this[kHeaders].set(key, new Header(name, value));
+    return this;
   }
 
   removeHeader(name: string) {
@@ -162,23 +155,25 @@ export class Response extends Writable {
         this.setHeader(key, headers[key]);
       }
     }
+    return this;
   }
 
-  end(data?: any, _?: any, callback?: () => void) {
+  end(data?: any, encoding?: any, callback?: () => void) {
     if (typeof data === 'function') {
       callback = data;
       data = undefined;
-    } else if (typeof _ === 'function') {
-      callback = _;
+    } else if (typeof encoding === 'function') {
+      callback = encoding;
     }
     if (this.aborted) {
       if (callback) process.nextTick(callback);
-      return;
+      return this;
     }
     if (this.destroyed) throw new ERR_STREAM_DESTROYED();
     this.writableEnded = true;
     if (callback) this.once('finish', callback);
-    return super.end(httpResponse(data, true));
+    super.end(httpResponse(data, true));
+    return this;
   }
 
   addTrailers() {
@@ -186,12 +181,19 @@ export class Response extends Writable {
   }
 
   destroy(err?: Error) {
-    if (this.destroyed || this.destroying || this.aborted) return;
+    if (this.destroyed || this.destroying || this.aborted) return this;
     this.socket.destroy(err);
+    return this;
   }
 
-  write(data: any): boolean {
-    if (this.aborted) return false;
+  write(data: any, encoding?: any, cb?: (err?: Error | null) => void): boolean {
+    if (typeof encoding === 'function') {
+      cb = encoding;
+    }
+    if (this.aborted) {
+      if (cb) process.nextTick(cb);
+      return false;
+    }
     if (this.destroyed) throw new ERR_STREAM_DESTROYED();
 
     const resp = httpResponse(data);
@@ -201,6 +203,7 @@ export class Response extends Writable {
       resp.end = true;
       this.writableEnded = true;
       super.end(resp);
+      if (cb) process.nextTick(cb);
       return true;
     }
 
@@ -217,7 +220,10 @@ export class Response extends Writable {
 
     // Fast path: write directly to socket, bypassing streamx queue.
     // The drain callback emits 'drain' on this Response when backpressure clears.
-    this.socket.write(resp, null, this._boundEmitDrain);
+    this.socket.write(resp, null, () => {
+      this._boundEmitDrain();
+      if (cb) cb();
+    });
     return !this.socket.writableNeedDrain;
   }
 

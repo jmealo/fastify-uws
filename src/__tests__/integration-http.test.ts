@@ -1,13 +1,15 @@
+import type { AddressInfo } from 'node:net';
 import axios from 'axios';
 import type { FastifyInstance } from 'fastify';
+import type { UwsServer } from '..';
 import { createApp } from './helpers';
 
-let app: FastifyInstance;
+let app: FastifyInstance<UwsServer>;
 let baseUrl: string;
 
 async function listen() {
   await app.listen({ port: 0, host: '127.0.0.1' });
-  const address = app.server.address();
+  const address = app.server.address() as AddressInfo;
   baseUrl = `http://127.0.0.1:${address.port}`;
 }
 
@@ -176,7 +178,7 @@ describe('HTTP Integration - Response features', () => {
     app.get('/trailers', (_req, reply) => {
       reply.hijack();
       reply.raw.writeHead(200, { 'content-type': 'text/plain' });
-      reply.raw.addTrailers({ 'x-trailer': 'value' });
+      reply.raw.addTrailers({});
       reply.raw.end('done');
     });
     await listen();

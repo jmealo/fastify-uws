@@ -1,15 +1,16 @@
 import * as net from 'node:net';
 import axios from 'axios';
 import type { FastifyInstance } from 'fastify';
+import type { UwsServer } from '..';
 import { createApp } from './helpers';
 
-let app: FastifyInstance;
+let app: FastifyInstance<UwsServer>;
 let baseUrl: string;
 let port: number;
 
 async function listen() {
   await app.listen({ port: 0, host: '127.0.0.1' });
-  const address = app.server.address();
+  const address = app.server.address() as net.AddressInfo;
   port = address.port;
   baseUrl = `http://127.0.0.1:${port}`;
 }
@@ -58,7 +59,7 @@ describe('Abort & Error Handling', () => {
     app.get('/abort-addr', async (req, reply) => {
       const socket = req.socket;
       // Access remoteAddress before abort - should work
-      const _before = socket.remoteAddress;
+      socket.remoteAddress;
 
       await new Promise<void>((resolve) => {
         socket.once('close', () => {

@@ -33,6 +33,24 @@ export default defineConfig({
     coverage: {
       include: ['src/**'],
       exclude: ['benchmarks/**', 'examples/**'],
+      thresholds: {
+        branches: 70,
+        functions: 80,
+        lines: 80,
+        statements: 80,
+        'src/plugin-websocket.ts': {
+          branches: 90,
+          functions: 100,
+          lines: 100,
+          statements: 95,
+        },
+        'src/websocket-server.ts': {
+          branches: 95,
+          functions: 100,
+          lines: 100,
+          statements: 100,
+        },
+      },
     },
   },
 });

@@ -1,11 +1,13 @@
 import uws from 'uWebSockets.js';
 import dns from 'node:dns/promises';
 import fs from 'node:fs';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { METHODS } from 'node:http';
 import type { ServerOptions } from 'node:https';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { EventEmitter } from 'eventemitter3';
+import { EventEmitter } from 'node:events';
 import type { FastifyServerFactoryHandler, FastifyServerOptions } from 'fastify';
 import ipaddr from 'ipaddr.js';
 
@@ -38,6 +40,7 @@ import type { WebSocketServer } from './websocket-server';
 interface FastifyUwsOptions extends FastifyServerOptions {
   http2?: boolean;
   https?: ServerOptions | null;
+  drainTimeout?: number;
 }
 
 function resolveFileOrBuffer(
@@ -107,32 +110,37 @@ const mainServer: Record<number, Server> = {};
 
 export class Server extends EventEmitter {
   [kHandler]: FastifyServerFactoryHandler;
-  timeout?: number;
+  timeout = 0;
+  drainTimeout?: number;
+  maxHeadersCount = 0;
+  maxRequestsPerSocket = 0;
+  headersTimeout = 0;
+  keepAliveTimeout = 0;
+  requestTimeout = 0;
+
   [kHttps]?: FastifyUwsOptions['https'];
   [kWs]?: WebSocketServer | null;
-  [kAddress]?: null | any;
-  [kListenSocket]?: null | any;
+  [kAddress]: AddressInfo | null = null;
+  [kListenSocket]: uws.us_listen_socket | null = null;
   [kApp]: uws.TemplatedApp;
-  [kClosed]?: boolean;
-  [kListenAll]?: boolean;
-  [kListening]?: boolean;
+  [kClosed] = false;
+  [kListenAll] = false;
+  [kListening] = false;
   [kTempFiles]: string[];
 
   constructor(handler: FastifyServerFactoryHandler, opts: FastifyUwsOptions = {}) {
     super();
 
-    const { http2 = false, https = null, connectionTimeout = 0 } = opts;
+    const { http2 = false, https = null, connectionTimeout = 0, drainTimeout } = opts;
 
     this[kHandler] = handler;
     this.timeout = connectionTimeout;
+    this.drainTimeout = drainTimeout;
     this[kHttps] = https;
     this[kWs] = null;
-    this[kAddress] = null;
-    this[kListenSocket] = null;
     const { app, tempFiles } = createApp({ http2, https });
     this[kApp] = app;
     this[kTempFiles] = tempFiles;
-    this[kClosed] = false;
   }
 
   get encrypted() {
@@ -140,14 +148,16 @@ export class Server extends EventEmitter {
   }
 
   get listening() {
-    return this[kListening];
+    return !!this[kListening];
   }
 
-  setTimeout(timeout: number) {
+  setTimeout(timeout: number, cb?: () => void) {
     this.timeout = timeout;
+    if (cb) this.once('timeout', cb);
+    return this;
   }
 
-  address() {
+  address(): AddressInfo | string | null {
     return this[kAddress];
   }
 
@@ -178,6 +188,14 @@ export class Server extends EventEmitter {
     // no-op: uWS manages connections internally
   }
 
+  closeAllConnections() {
+    if (this[kWs]) {
+      for (const conn of this[kWs].connections) {
+        conn.close();
+      }
+    }
+  }
+
   close(cb = () => {}) {
     if (this[kClosed]) return cb();
     const port = this[kAddress]?.port;
@@ -191,11 +209,7 @@ export class Server extends EventEmitter {
       uws.us_listen_socket_close(this[kListenSocket]);
       this[kListenSocket] = null;
     }
-    if (this[kWs]) {
-      for (const conn of this[kWs].connections) {
-        conn.close();
-      }
-    }
+    this.closeAllConnections();
     for (const f of this[kTempFiles]) {
       try {
         fs.unlinkSync(f);
@@ -224,14 +238,14 @@ export class Server extends EventEmitter {
     const lookupAddress = await dns.lookup(host);
 
     this[kAddress] = {
-      ...lookupAddress,
+      address: lookupAddress.address,
+      family: lookupAddress.family === 6 ? 'IPv6' : 'IPv4',
       port,
     };
 
-    if (this[kAddress].address.startsWith('[')) throw new ERR_ENOTFOUND(this[kAddress].address);
+    if (this[kAddress]!.address.startsWith('[')) throw new ERR_ENOTFOUND(this[kAddress]!.address);
 
-    const parsedAddress = ipaddr.parse(this[kAddress].address);
-    this[kAddress].family = parsedAddress.kind() === 'ipv6' ? 'IPv6' : 'IPv4';
+    const parsedAddress = ipaddr.parse(this[kAddress]!.address);
     const longAddress = parsedAddress.toNormalizedString();
 
     const app = this[kApp];
@@ -251,7 +265,7 @@ export class Server extends EventEmitter {
       if (request.headers.upgrade) {
         this.emit('upgrade', request, socket);
       }
-      this[kHandler](request as any, response as any);
+      this[kHandler](request as unknown as IncomingMessage, response as unknown as ServerResponse);
     };
 
     app.any('/*', onRequest);
@@ -266,9 +280,9 @@ export class Server extends EventEmitter {
 
     return new Promise<void>((resolve, reject) => {
       const onListen = (listenSocket: uws.us_listen_socket | false) => {
-        if (!listenSocket) return reject(new ERR_ADDRINUSE(this[kAddress].address, port));
+        if (!listenSocket) return reject(new ERR_ADDRINUSE(this[kAddress]!.address, port));
         this[kListenSocket] = listenSocket;
-        port = this[kAddress].port = uws.us_socket_local_port(listenSocket);
+        port = this[kAddress]!.port = uws.us_socket_local_port(listenSocket);
         if (!mainServer[port]) mainServer[port] = this;
         resolve();
       };

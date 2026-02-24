@@ -1,7 +1,9 @@
+import type { AddressInfo } from 'node:net';
 import type { FastifyInstance } from 'fastify';
+import type { UwsServer } from '..';
 import { createApp } from './helpers';
 
-let app: FastifyInstance;
+let app: FastifyInstance<UwsServer>;
 
 afterEach(async () => {
   if (app) {
@@ -21,7 +23,7 @@ describe('Server Lifecycle', () => {
     app = createApp();
     app.get('/', (_req, reply) => reply.send({ ok: true }));
     await app.listen({ port: 0, host: '127.0.0.1' });
-    const address = app.server.address();
+    const address = app.server.address() as AddressInfo;
     expect(address).toBeDefined();
     expect(address.port).toBeGreaterThan(0);
     expect(address.address).toBe('127.0.0.1');
@@ -61,7 +63,7 @@ describe('Server Lifecycle', () => {
     app.server.closeIdleConnections();
     expect(app.server.listening).toBe(true);
 
-    const address = app.server.address();
+    const address = app.server.address() as AddressInfo;
     expect(address).toBeDefined();
     expect(address.port).toBeGreaterThan(0);
   });

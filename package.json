@@ -25,7 +25,8 @@
     "bench": "node benchmarks/compare/run.js",
     "build": "vite build",
     "check": "biome check --write",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
   },
   "repository": {
     "type": "git",

@@ -3,6 +3,7 @@ import type {
   FastifyBaseLogger,
   FastifyInstance,
   FastifyRequest,
+  FastifyReply,
   FastifySchema,
   FastifyServerFactory,
   FastifyTypeProvider,
@@ -13,16 +14,47 @@ import type {
   RawServerDefault,
   RequestGenericInterface,
 } from 'fastify';
-import type WebSocket from 'ws';
 import { Server } from './server';
+import { Request } from './request';
+import { Response } from './response';
+import { WebSocket as UwsWebSocket, WebSocketServer, WebSocketStream } from './websocket-server';
+
+export type UwsServer = RawServerDefault & Server;
+export type UwsRequest = Request;
+export type UwsResponse = Response;
+
+export type FastifyUwsInstance<
+  TypeProvider extends FastifyTypeProvider = FastifyTypeProviderDefault,
+  Logger extends FastifyBaseLogger = FastifyBaseLogger,
+> = FastifyInstance<any, any, any, Logger, TypeProvider>;
+
+export type FastifyUwsRequest<
+  RequestGeneric extends RequestGenericInterface = RequestGenericInterface,
+  SchemaCompiler extends FastifySchema = FastifySchema,
+  TypeProvider extends FastifyTypeProvider = FastifyTypeProviderDefault,
+  ContextConfig = ContextConfigDefault,
+  Logger extends FastifyBaseLogger = FastifyBaseLogger,
+> = FastifyRequest<RequestGeneric, any, any, SchemaCompiler, TypeProvider, ContextConfig, Logger>;
+
+export type FastifyUwsReply<
+  RequestGeneric extends RequestGenericInterface = RequestGenericInterface,
+  SchemaCompiler extends FastifySchema = FastifySchema,
+  TypeProvider extends FastifyTypeProvider = FastifyTypeProviderDefault,
+  ContextConfig = ContextConfigDefault,
+> = FastifyReply<RequestGeneric, any, any, any, ContextConfig, SchemaCompiler, TypeProvider>;
 
 export const serverFactory: FastifyServerFactory<any> = (handler, options) => {
   return new Server(handler as any, options);
 };
 
 export { default as websocket } from './plugin-websocket';
+export { UwsWebSocket as WebSocket, WebSocketServer, WebSocketStream, Server, Request, Response };
 
 declare module 'fastify' {
+  interface RouteOptions {
+    websocket?: boolean;
+  }
+
   // biome-ignore lint/correctness/noUnusedVariables: must match Fastify's type parameter name for declaration merging
   interface RouteShorthandOptions<RawServer extends RawServerBase = RawServerDefault> {
     websocket?: boolean;
@@ -57,7 +89,7 @@ declare module 'fastify' {
         Logger
       > & { websocket: true },
       handler?: (
-        socket: WebSocket,
+        socket: UwsWebSocket,
         req: FastifyRequest<
           RequestGeneric,
           RawServer,
@@ -67,7 +99,7 @@ declare module 'fastify' {
           ContextConfig,
           Logger
         >,
-      ) => undefined | Promise<any>,
+      ) => void | Promise<any>,
     ): FastifyInstance<RawServer, RawRequest, RawReply, Logger, TypeProvider>;
   }
 }

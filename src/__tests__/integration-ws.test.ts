@@ -1,14 +1,16 @@
+import type { AddressInfo } from 'node:net';
 import type { FastifyInstance } from 'fastify';
 import WebSocketClient from 'ws';
+import type { UwsServer, WebSocket } from '..';
 import { websocket } from '..';
 import { createApp } from './helpers';
 
-let app: FastifyInstance;
+let app: FastifyInstance<UwsServer>;
 let baseUrl: string;
 
 async function listen() {
   await app.listen({ port: 0, host: '127.0.0.1' });
-  const address = app.server.address();
+  const address = app.server.address() as AddressInfo;
   baseUrl = `ws://127.0.0.1:${address.port}`;
 }
 
@@ -23,9 +25,9 @@ describe('WebSocket Integration', () => {
     app = createApp();
     app.register(websocket);
     app.register(async (instance) => {
-      instance.get('/ws', { websocket: true }, (socket) => {
-        socket.on('message', (msg) => {
-          socket.send(`echo: ${msg}`);
+      instance.get('/ws', { websocket: true }, (socket: WebSocket) => {
+        socket.on('message', (msg: any) => {
+          socket.send(`echo: ${msg}`, false, false);
         });
       });
     });
@@ -48,8 +50,8 @@ describe('WebSocket Integration', () => {
     app = createApp();
     app.register(websocket);
     app.register(async (instance) => {
-      instance.get('/ws-bin', { websocket: true }, (socket) => {
-        socket.on('message', (msg) => {
+      instance.get('/ws-bin', { websocket: true }, (socket: WebSocket) => {
+        socket.on('message', (msg: any) => {
           socket.send(msg, true, false);
         });
       });
@@ -64,8 +66,9 @@ describe('WebSocket Integration', () => {
       ws.on('error', reject);
     });
 
+    expect(message).toBeDefined();
     expect(Buffer.isBuffer(message)).toBe(true);
-    expect([...message]).toEqual([1, 2, 3]);
+    expect([...(message as any)]).toEqual([1, 2, 3]);
     ws.close();
     await new Promise((resolve) => ws.on('close', resolve));
   });
@@ -74,9 +77,9 @@ describe('WebSocket Integration', () => {
     app = createApp();
     app.register(websocket);
     app.register(async (instance) => {
-      instance.get('/ws-multi', { websocket: true }, (socket) => {
-        socket.on('message', (msg) => {
-          socket.send(`reply: ${msg}`);
+      instance.get('/ws-multi', { websocket: true }, (socket: WebSocket) => {
+        socket.on('message', (msg: any) => {
+          socket.send(`reply: ${msg}`, false, false);
         });
       });
     });
@@ -109,7 +112,7 @@ describe('WebSocket Integration', () => {
     app = createApp();
     app.register(websocket);
     app.register(async (instance) => {
-      instance.get('/ws-close', { websocket: true }, (socket) => {
+      instance.get('/ws-close', { websocket: true }, (socket: WebSocket) => {
         socket.on('message', () => {
           socket.end(1000, 'goodbye');
         });

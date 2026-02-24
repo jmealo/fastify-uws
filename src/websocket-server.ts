@@ -1,6 +1,7 @@
 import uws from 'uWebSockets.js';
 import { EventEmitter } from 'eventemitter3';
 import { Duplex } from 'streamx';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { HTTPSocket } from './http-socket';
 import { Request } from './request';
 import { Response } from './response';
@@ -186,9 +187,31 @@ export class WebSocketStream extends Duplex {
     this.push({ data, isBinary });
   }
 
-  _write(packet: any, cb: () => void) {
-    this.socket.send(packet.data, packet.isBinary, packet.compress);
-    cb();
+  _write(packet: any, cb: (err?: Error | null) => void) {
+    const status = this.socket.send(packet.data, packet.isBinary, packet.compress);
+    if (status === 1) return cb();
+
+    if (status === 0) {
+      // Wait for uWS drain before marking this write as complete.
+      const onDrain = () => {
+        this.socket.off('close', onClose);
+        cb();
+      };
+      const onClose = () => {
+        this.socket.off('drain', onDrain);
+        cb(new Error('WebSocket closed before drain'));
+      };
+
+      this.socket.once('drain', onDrain);
+      this.socket.once('close', onClose);
+      return;
+    }
+
+    if (status === 2) {
+      return cb(new Error('WebSocket send dropped due to backpressure limit'));
+    }
+
+    cb(new Error('WebSocket is closed'));
   }
 }
 
@@ -225,7 +248,7 @@ export class WebSocketServer extends EventEmitter {
         const response = new Response(socket);
         request[kWs] = context;
         server.emit('upgrade', request, socket);
-        listenerHandler(request as any, response as any);
+        listenerHandler(request as unknown as IncomingMessage, response as unknown as ServerResponse);
       },
       open: (ws) => {
         this.connections.add(ws);

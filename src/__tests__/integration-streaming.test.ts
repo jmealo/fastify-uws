@@ -1,16 +1,18 @@
+import type { AddressInfo } from 'node:net';
 import * as crypto from 'node:crypto';
 import * as net from 'node:net';
 import axios from 'axios';
 import type { FastifyInstance } from 'fastify';
+import type { UwsServer } from '..';
 import { createApp } from './helpers';
 
-let app: FastifyInstance;
+let app: FastifyInstance<UwsServer>;
 let baseUrl: string;
 let port: number;
 
 async function listen() {
   await app.listen({ port: 0, host: '127.0.0.1' });
-  const address = app.server.address();
+  const address = app.server.address() as AddressInfo;
   port = address.port;
   baseUrl = `http://127.0.0.1:${port}`;
 }
@@ -165,7 +167,7 @@ describe('Response Body Streaming (outbound)', () => {
       reply.raw.writeHead(200, { 'content-type': 'text/plain' });
       reply.raw.end('done', 'utf-8', () => {
         callbackInvoked = true;
-        bytesWrittenValue = reply.raw.bytesWritten;
+        bytesWrittenValue = (reply.raw as any).bytesWritten;
       });
     });
     await listen();

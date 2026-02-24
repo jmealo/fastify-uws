@@ -4,19 +4,20 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import axios from 'axios';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import fastify from 'fastify';
 import { afterEach, describe, expect, test } from 'vitest';
 import WebSocketClient from 'ws';
+import type { UwsServer, WebSocket } from '..';
 import { serverFactory, websocket } from '..';
 import { createApp } from './helpers';
 
-let app: FastifyInstance;
+let app: FastifyInstance<UwsServer>;
 let baseUrl: string;
 
 async function listen() {
   await app.listen({ port: 0, host: '127.0.0.1' });
-  const address = app.server.address();
+  const address = app.server.address() as net.AddressInfo;
   baseUrl = `http://127.0.0.1:${address.port}`;
 }
 
@@ -35,10 +36,10 @@ describe('Security - WebSocket buffer safety (Fix 1)', () => {
 
     const receivedBuffers: Buffer[] = [];
     app.register(async (instance) => {
-      instance.get('/ws-buf', { websocket: true }, (socket) => {
-        socket.on('message', (msg) => {
+      instance.get('/ws-buf', { websocket: true }, (socket: WebSocket) => {
+        socket.on('message', (msg: Buffer) => {
           receivedBuffers.push(msg);
-          socket.send('ack');
+          socket.send('ack', false, false);
         });
       });
     });
@@ -67,14 +68,14 @@ describe('Security - WebSocket buffer safety (Fix 1)', () => {
 
     const receivedBuffers: Buffer[] = [];
     const messageCount = 10;
-    let resolveAll: () => void;
+    let resolveAll: () => void = () => {};
     const allReceived = new Promise<void>((r) => {
       resolveAll = r;
     });
 
     app.register(async (instance) => {
-      instance.get('/ws-multi-buf', { websocket: true }, (socket) => {
-        socket.on('message', (msg) => {
+      instance.get('/ws-multi-buf', { websocket: true }, (socket: WebSocket) => {
+        socket.on('message', (msg: Buffer) => {
           receivedBuffers.push(msg);
           if (receivedBuffers.length === messageCount) {
             resolveAll();
@@ -142,11 +143,11 @@ describe('Security - TLS implementation (Fix 2)', () => {
       app = fastify({
         serverFactory,
         https: { key: keyPath, cert: certPath },
-      });
+      }) as unknown as FastifyInstance<UwsServer>;
       app.get('/tls-test', (_req, reply) => reply.send({ secure: true }));
       await app.listen({ port: 0, host: '127.0.0.1' });
 
-      const address = app.server.address();
+      const address = app.server.address() as net.AddressInfo;
       const port = address.port;
 
       const res = await axios.get(`https://127.0.0.1:${port}/tls-test`, {
@@ -171,11 +172,11 @@ describe('Security - TLS implementation (Fix 2)', () => {
       app = fastify({
         serverFactory,
         https: { key: keyBuf, cert: certBuf },
-      });
+      }) as unknown as FastifyInstance<UwsServer>;
       app.get('/tls-buf-test', (_req, reply) => reply.send({ secure: true }));
       await app.listen({ port: 0, host: '127.0.0.1' });
 
-      const address = app.server.address();
+      const address = app.server.address() as net.AddressInfo;
       const port = address.port;
 
       const res = await axios.get(`https://127.0.0.1:${port}/tls-buf-test`, {
@@ -200,7 +201,7 @@ describe('Security - TLS implementation (Fix 2)', () => {
       app = fastify({
         serverFactory,
         https: { key: keyBuf, cert: certBuf },
-      });
+      }) as unknown as FastifyInstance<UwsServer>;
       app.get('/', (_req, reply) => reply.send('ok'));
       await app.listen({ port: 0, host: '127.0.0.1' });
 
@@ -249,7 +250,7 @@ describe('Security - drain timeout (Fix 3)', () => {
     app.get('/health', (_req, reply) => reply.send({ ok: true }));
     await listen();
 
-    const address = app.server.address();
+    const address = app.server.address() as net.AddressInfo;
 
     // Create a raw TCP connection that connects but never reads
     const slowClient = new net.Socket();
@@ -417,7 +418,7 @@ describe('Security - Header CRLF injection (Fix 5)', () => {
     const res = await axios.get(`${baseUrl}/crlf-array`);
     expect(res.headers['x-evil']).toBeUndefined();
     // The cookie values should still be present (with CRLF stripped)
-    const cookies = res.headers['set-cookie'];
+    const cookies = res.headers['set-cookie'] as string[];
     expect(cookies).toBeDefined();
     expect(cookies.some((c: string) => c.includes('a=1'))).toBe(true);
   });
@@ -443,9 +444,9 @@ describe('Security - WebSocket upgrade validation (Fix 6)', () => {
     app = createApp();
     app.register(websocket);
     app.register(async (instance) => {
-      instance.get('/ws-key', { websocket: true }, (socket) => {
-        socket.on('message', (msg) => {
-          socket.send(`echo: ${msg}`);
+      instance.get('/ws-key', { websocket: true }, (socket: WebSocket) => {
+        socket.on('message', (msg: Buffer) => {
+          socket.send(`echo: ${msg}`, false, false);
         });
       });
     });
@@ -463,6 +464,7 @@ describe('Security - WebSocket upgrade validation (Fix 6)', () => {
     expect(healthRes.status).toBe(200);
     expect(healthRes.data).toEqual({ ok: true });
   });
+
 });
 
 // ─── Buffer safety: WebSocket close event ────────────────────────────────────
@@ -474,14 +476,14 @@ describe('Security - WebSocket close/ping buffer safety', () => {
 
     let closeMessage: Buffer | null = null;
     let closeCode: number | null = null;
-    let closeReceived: () => void;
+    let closeReceived: () => void = () => {};
     const closePromise = new Promise<void>((r) => {
       closeReceived = r;
     });
 
     app.register(async (instance) => {
-      instance.get('/ws-close-buf', { websocket: true }, (socket) => {
-        socket.on('close', (code, msg) => {
+      instance.get('/ws-close-buf', { websocket: true }, (socket: WebSocket) => {
+        socket.on('close', (code: number, msg: Buffer) => {
           closeCode = code;
           closeMessage = msg;
           closeReceived();
@@ -500,9 +502,12 @@ describe('Security - WebSocket close/ping buffer safety', () => {
     expect(closeCode).toBe(1000);
     // The close message should be a Buffer (safely copied), not corrupted
     expect(closeMessage).toBeDefined();
-    if (Buffer.isBuffer(closeMessage)) {
-      expect(closeMessage.toString()).toBe('test-close-reason');
+    if (!closeMessage) {
+      throw new Error('expected close message');
     }
+    expect(Buffer.isBuffer(closeMessage)).toBe(true);
+    const closeText = Buffer.from(closeMessage as unknown as Uint8Array).toString();
+    expect(closeText).toBe('test-close-reason');
   });
 
   test('ping event message buffer is safely copied', async () => {
@@ -510,14 +515,14 @@ describe('Security - WebSocket close/ping buffer safety', () => {
     app.register(websocket);
 
     let pingData: Buffer | null = null;
-    let pingReceived: () => void;
+    let pingReceived: () => void = () => {};
     const pingPromise = new Promise<void>((r) => {
       pingReceived = r;
     });
 
     app.register(async (instance) => {
-      instance.get('/ws-ping-buf', { websocket: true }, (socket) => {
-        socket.on('ping', (msg) => {
+      instance.get('/ws-ping-buf', { websocket: true }, (socket: WebSocket) => {
+        socket.on('ping', (msg: Buffer) => {
           pingData = msg;
           pingReceived();
         });
@@ -575,11 +580,11 @@ describe('Security - TLS array key/cert support', () => {
       app = fastify({
         serverFactory,
         https: { key: [keyBuf], cert: [certBuf] },
-      });
+      }) as unknown as FastifyInstance<UwsServer>;
       app.get('/tls-arr', (_req, reply) => reply.send({ secure: true }));
       await app.listen({ port: 0, host: '127.0.0.1' });
 
-      const address = app.server.address();
+      const address = app.server.address() as net.AddressInfo;
       const res = await axios.get(`https://127.0.0.1:${address.port}/tls-arr`, {
         httpsAgent: new (await import('node:https')).Agent({ rejectUnauthorized: false }),
       });
@@ -611,8 +616,8 @@ describe('Security - getRemoteAddress buffer safety', () => {
     app = createApp();
 
     const addresses: string[] = [];
-    app.get('/addr', (req, reply) => {
-      addresses.push(req.socket.remoteAddress);
+    app.get('/addr', (req: FastifyRequest, reply) => {
+      addresses.push(req.socket.remoteAddress!);
       reply.send({ addr: req.socket.remoteAddress });
     });
     await listen();

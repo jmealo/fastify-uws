@@ -1,5 +1,5 @@
 import type uws from 'uWebSockets.js';
-import { EventEmitter } from 'eventemitter3';
+import { EventEmitter } from 'node:events';
 import { ERR_STREAM_DESTROYED } from './errors';
 import type { Server } from './server';
 import {
@@ -9,7 +9,7 @@ import {
   kHead,
   kHttps,
   kReadyState,
-  kRemoteAdress,
+  kRemoteAddress,
   kRes,
   kServer,
   kTimeoutRef,
@@ -22,9 +22,14 @@ const localAddressIpv6 = Buffer.from([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
 
 const toHex = (buf: Buffer, start: number, end: number) => buf.subarray(start, end).toString('hex');
 
-const DRAIN_TIMEOUT_MS = 30_000;
+const DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 
 const noop = () => {};
+
+export interface UwsHead {
+  status?: string;
+  headers?: Map<string, { name: string; value: any; isMultiValue: boolean }>;
+}
 
 function onAbort(this: HTTPSocket) {
   this._clearTimeout();
@@ -32,7 +37,7 @@ function onAbort(this: HTTPSocket) {
   // Resolve any pending drain before emitting events
   this._resolveDrain();
   this.emit('aborted');
-  this.errored && this.emit('error', this.errored);
+  if (this.errored) this.emit('error', this.errored);
   this.emit('close');
 }
 
@@ -48,7 +53,7 @@ function onTimeout(this: HTTPSocket) {
   }
 }
 
-function writeHead(res: uws.HttpResponse, head: any) {
+function writeHead(res: uws.HttpResponse, head: UwsHead) {
   if (head.status) res.writeStatus(head.status);
   if (head.headers) {
     for (const header of head.headers.values()) {
@@ -63,10 +68,10 @@ function writeHead(res: uws.HttpResponse, head: any) {
   }
 }
 
-function byteLength(data: any): number {
-  if (data?.empty) return 0;
-  if (data?.byteLength !== undefined) return data.byteLength;
-  return Buffer.byteLength(data);
+function byteLength(data: { byteLength?: number; empty?: boolean } | Buffer | string): number {
+  if ((data as any).empty) return 0;
+  if ((data as any).byteLength !== undefined) return (data as any).byteLength;
+  return Buffer.byteLength(data as string | Buffer);
 }
 
 function getChunk(data: any): any {
@@ -80,9 +85,10 @@ export class HTTPSocket extends EventEmitter {
   bytesRead = 0;
   bytesWritten = 0;
   writableEnded = false;
-  errored: any = null;
+  errored: Error | null = null;
+  drainTimeout = DEFAULT_DRAIN_TIMEOUT_MS;
   _drainCb: (() => void) | null = null;
-  _drainTimer: ReturnType<typeof setTimeout> | null = null;
+  _drainTimer: NodeJS.Timeout | null = null;
   _pendingData: any = null;
   _pendingCb: () => void = noop;
   _boundCorkWrite: () => void;
@@ -93,10 +99,10 @@ export class HTTPSocket extends EventEmitter {
   [kRes]: uws.HttpResponse;
   [kWriteOnly]: boolean;
   [kReadyState]: { read: boolean; write: boolean } = { read: false, write: false };
-  [kEncoding]: any = null;
-  [kRemoteAdress]: any = null;
-  [kUwsRemoteAddress]: any = null;
-  [kHead]: any = null;
+  [kEncoding]: string | null = null;
+  [kRemoteAddress]: string | null = null;
+  [kUwsRemoteAddress]: Buffer | null = null;
+  [kHead]: UwsHead | null = null;
   [kClientError] = false;
   [kTimeoutRef]?: NodeJS.Timeout;
   [kWs]?: boolean;
@@ -107,6 +113,10 @@ export class HTTPSocket extends EventEmitter {
     this[kServer] = server;
     this[kRes] = res;
     this[kWriteOnly] = writeOnly;
+
+    if (server.drainTimeout) {
+      this.drainTimeout = server.drainTimeout;
+    }
 
     this._boundCorkWrite = this._corkWrite.bind(this);
     this._boundCorkEnd = this._corkEnd.bind(this);
@@ -145,7 +155,7 @@ export class HTTPSocket extends EventEmitter {
   get remoteAddress() {
     if (this.aborted) return undefined;
 
-    let remoteAddress = this[kRemoteAdress];
+    let remoteAddress = this[kRemoteAddress];
     if (remoteAddress) return remoteAddress;
 
     let buf = this[kUwsRemoteAddress];
@@ -166,7 +176,7 @@ export class HTTPSocket extends EventEmitter {
       }
     }
 
-    this[kRemoteAdress] = remoteAddress;
+    this[kRemoteAddress] = remoteAddress;
     return remoteAddress;
   }
 
@@ -210,7 +220,7 @@ export class HTTPSocket extends EventEmitter {
   destroy(err?: Error) {
     if (this.aborted) return;
     this._clearTimeout();
-    this.errored = err;
+    this.errored = err || null;
     this.abort();
   }
 
@@ -227,7 +237,7 @@ export class HTTPSocket extends EventEmitter {
         this.bytesRead += ab.byteLength;
 
         const data = encoding
-          ? Buffer.copyBytesFrom(new Uint8Array(ab)).toString(encoding)
+          ? Buffer.copyBytesFrom(new Uint8Array(ab)).toString(encoding as BufferEncoding)
           : Buffer.copyBytesFrom(new Uint8Array(ab));
 
         this.emit('data', data);
@@ -261,15 +271,18 @@ export class HTTPSocket extends EventEmitter {
 
     if (this[kClientError] && typeof data === 'string' && data.startsWith('HTTP/')) {
       const [header, body] = data.split('\r\n\r\n');
-      const [first, ...headers] = header.split('\r\n');
+      const [first, ...headersLines] = header.split('\r\n');
       const [, code, statusText] = first.split(' ');
+      const headersMap = new Map<string, { name: string; value: any; isMultiValue: boolean }>();
+      for (const line of headersLines) {
+        const [name, ...valueParts] = line.split(': ');
+        const value = valueParts.join(': ').trim();
+        if (name.toLowerCase() !== 'content-length') {
+          headersMap.set(name.toLowerCase(), { name, value, isMultiValue: false });
+        }
+      }
       this[kHead] = {
-        headers: headers
-          .map((header) => {
-            const [name, ...value] = header.split(': ');
-            return { name, value: value.join(': ').trim() };
-          })
-          .filter((header) => header.name.toLowerCase() !== 'content-length'),
+        headers: headersMap,
         status: `${code} ${statusText}`,
       };
       data = body;
@@ -303,7 +316,7 @@ export class HTTPSocket extends EventEmitter {
     // Backpressure: store callback, invoke when uWS signals writable
     this.writableNeedDrain = true;
     this._drainCb = cb;
-    this._drainTimer = setTimeout(this._boundDrainTimeout, DRAIN_TIMEOUT_MS);
+    this._drainTimer = setTimeout(this._boundDrainTimeout, this.drainTimeout);
   }
 
   _corkEnd() {
