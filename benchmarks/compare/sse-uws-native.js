@@ -1,11 +1,7 @@
 import fastify from 'fastify';
-import sse from '@fastify/sse';
-import { serverFactory } from '../../dist/index.js';
+import { serverFactory, sse } from '../../dist/index.js';
 
-// Compatibility mode benchmark:
-// Fastify's @fastify/sse plugin running on fastify-uws transport.
 const app = fastify({ serverFactory, logger: false });
-
 await app.register(sse);
 
 app.get('/sse', { sse: true }, async (request, reply) => {

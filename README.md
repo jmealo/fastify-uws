@@ -191,7 +191,7 @@ export default (async (app) => {
 
 ```ts
 // app.ts
-import sse from '@fastify/sse';
+import { sse } from '@jmealo/fastify-uws';
 
 app.register(sse);
 ```
@@ -246,69 +246,36 @@ export default () => {
 
 ### Quick Comparison
 
-> Measured with `pnpm bench` — autocannon, 100 connections, 10s duration, pipelining 10
+> Measured with `pnpm bench` — 100 connections, 60s duration, pipelining 10
 
 #### HTTP — `GET /ping` → `{ ok: true }`
 
 | | Req/sec | Latency (mean) | Latency (p99) |
 | :--- | ---: | ---: | ---: |
-| fastify | 93,000 | 10.3 ms | 26 ms |
-| **fastify-uws** | **200,000** | **4.6 ms** | **9 ms** |
-| | **+115%** | **-55%** | **-65%** |
+| fastify | 78,113.9 | 12.3 ms | 30 ms |
+| **fastify-uws** | **147,132.8** | **6.3 ms** | **16 ms** |
+| | **+88.4%** | **-48.7%** | **-46.7%** |
 
-#### WebSocket — 100 clients, 64B echo flood, 10s
+#### WebSocket — 100 clients, 64B echo flood, 60s
 
 | | Messages/sec |
 | :--- | ---: |
-| @fastify/websocket (ws) | 91,000 |
-| **fastify-uws** | **94,000** |
-| | **+3%** |
+| @fastify/websocket (ws) | 62,398 |
+| **fastify-uws** | **59,649** |
+| | **-4.4%** |
 
-#### SSE — 100 clients, 64B events, 10s
+#### SSE — 100 clients, 64B events, 60s
 
 | | Events/sec |
 | :--- | ---: |
-| @fastify/sse (default) | 420,000 |
-| **@fastify/sse + fastify-uws** | **197,000** |
-| | **-53%** |
+| @fastify/sse (default) | 414,717 |
+| @fastify/sse + fastify-uws (compat) | 162,781 |
+| **fastify-uws native sse plugin** | **937,420** |
+| Δ compat vs default | -60.7% |
+| Δ native vs default | +126.0% |
+| Δ native vs compat | +475.9% |
 
 > Results vary by machine. Run `pnpm bench` to reproduce.
-
-### [oha v1.4.5](https://github.com/hatoo/oha)
-
-```sh
-$ oha -c 500 -z 10s --no-tui http://0.0.0.0:3000/api/hello-world
-```
-
-|               |       Version | Language        | Router | Requests/sec |
-| :------------ | ------------: | :-------------- | -----: | -----------: |
-| hyper         |         1.4.1 | Rust            |      ✗ |  56,175.6102 |
-| warp          |         0.3.7 | Rust            |      ✓ |  55,868.5861 |
-| axum          |         0.7.7 | Rust            |      ✓ |  54,588.2828 |
-| bun           |        1.1.30 | TypeScript/Bun  |      ✗ |  54,098.4841 |
-| graphul       |         1.0.1 | Rust            |      ✓ |  53,949.4400 |
-| poem          |         3.1.0 | Rust            |      ✓ |  53,849.0781 |
-| uws           |       20.48.0 | JavaScript/Node |      ✗ |  52,802.8029 |
-| elysia        |        1.1.17 | TypeScript/Bun  |      ✓ |  52,257.3305 |
-|               |               |                 |        |     ~ 5.5k ~ |
-| hyper-express |        6.17.2 | JavaScript/Node |      ✓ |  46,745.4887 |
-| hono          |         4.6.3 | TypeScript/Bun  |      ✓ |  46,685.6014 |
-| nhttp         |         2.0.2 | TypeScript/Deno |      ✓ |  44,874.2535 |
-| deno          |         2.0.0 | TypeScript/Deno |      ✗ |  44,753.8552 |
-| hono          |         4.6.3 | TypeScript/Deno |      ✓ |  43,280.7544 |
-|               |               |                 |        |     ~ 9.2k ~ |
-| h3            |        1.12.0 | TypeScript/Bun  |      ✓ |  34,043.4693 |
-| fastify-uws   |         1.0.0 | JavaScript/Node |      ✓ |  31,295.8715 |
-| polka         | 1.0.0-next.28 | JavaScript/Node |      ✓ |  31,086.5543 |
-| oak           |        17.0.0 | TypeScript/Deno |      ✓ |  30,730.7971 |
-| node          |       20.18.0 | JavaScript/Node |      ✗ |  29,230.1719 |
-| oak           |        17.0.0 | TypeScript/Bun  |      ✓ |  27,449.3417 |
-| fastify       |         5.0.0 | JavaScript/Node |      ✓ |  27,408.6679 |
-| hono          |         4.6.3 | JavaScript/Node |      ✓ |  25,138.5659 |
-|               |               |                 |        |     ~ 4.9k ~ |
-| h3            |        1.12.0 | JavaScript/Node |      ✓ |  20,193.2311 |
-|               |               |                 |        |     ~ 9.2k ~ |
-| express       |        4.21.0 | JavaScript/Node |      ✓ |  10,949.1532 |
 
 ## Credits
 

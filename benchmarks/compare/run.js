@@ -11,15 +11,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 import http from 'node:http';
 
-const HTTP_DURATION = 10;
-const HTTP_CONNECTIONS = 100;
-const HTTP_PIPELINING = 10;
-const WS_DURATION = 10_000;
-const WS_CLIENTS = 100;
+const HTTP_DURATION = Number(process.env.BENCH_HTTP_DURATION_SECONDS || 30);
+const HTTP_CONNECTIONS = Number(process.env.BENCH_HTTP_CONNECTIONS || 100);
+const HTTP_PIPELINING = Number(process.env.BENCH_HTTP_PIPELINING || 10);
+const WS_DURATION = Number(process.env.BENCH_WS_DURATION_MS || 30_000);
+const WS_CLIENTS = Number(process.env.BENCH_WS_CLIENTS || 100);
 const WS_PAYLOAD = Buffer.alloc(64, 'x');
-const SSE_DURATION = 10_000;
-const SSE_CLIENTS = 100;
-const STARTUP_TIMEOUT = 10_000;
+const SSE_DURATION = Number(process.env.BENCH_SSE_DURATION_MS || 30_000);
+const SSE_CLIENTS = Number(process.env.BENCH_SSE_CLIENTS || 100);
+const STARTUP_TIMEOUT = Number(process.env.BENCH_STARTUP_TIMEOUT_MS || 10_000);
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -202,12 +202,17 @@ async function benchSSE() {
   const defResult = await runSseBench(def.port);
   await killServer(def.child);
 
-  console.log('  SSE: fastify-uws + @fastify/sse...');
-  const uws = await spawnServer('sse-uws.js');
-  const uwsResult = await runSseBench(uws.port);
-  await killServer(uws.child);
+  console.log('  SSE: fastify-uws + @fastify/sse (compat mode)...');
+  const compat = await spawnServer('sse-uws.js');
+  const compatResult = await runSseBench(compat.port);
+  await killServer(compat.child);
 
-  return { defResult, uwsResult };
+  console.log('  SSE: fastify-uws native sse plugin...');
+  const native = await spawnServer('sse-uws-native.js');
+  const nativeResult = await runSseBench(native.port);
+  await killServer(native.child);
+
+  return { defResult, compatResult, nativeResult };
 }
 
 // ── Main ─────────────────────────────────────────────────────────────
@@ -236,7 +241,8 @@ const defMps = Math.round(ws.defResult.totalMessages / (WS_DURATION / 1000));
 const uwsMps = Math.round(ws.uwsResult.totalMessages / (WS_DURATION / 1000));
 
 const defEps = Math.round(sse.defResult.totalEvents / (SSE_DURATION / 1000));
-const uwsEps = Math.round(sse.uwsResult.totalEvents / (SSE_DURATION / 1000));
+const compatEps = Math.round(sse.compatResult.totalEvents / (SSE_DURATION / 1000));
+const nativeEps = Math.round(sse.nativeResult.totalEvents / (SSE_DURATION / 1000));
 
 console.log('\n---\n');
 console.log('### Quick Comparison\n');
@@ -260,7 +266,10 @@ console.log(`\n#### SSE — ${SSE_CLIENTS} clients, 64B events, ${SSE_DURATION /
 console.log('| | Events/sec |');
 console.log('| :--- | ---: |');
 console.log(`| @fastify/sse (default) | ${fmt(defEps)} |`);
-console.log(`| **@fastify/sse + fastify-uws** | **${fmt(uwsEps)}** |`);
-console.log(`| | **${pct(uwsEps, defEps)}** |`);
+console.log(`| @fastify/sse + fastify-uws (compat) | ${fmt(compatEps)} |`);
+console.log(`| **fastify-uws native sse plugin** | **${fmt(nativeEps)}** |`);
+console.log(`| Δ compat vs default | ${pct(compatEps, defEps)} |`);
+console.log(`| Δ native vs default | ${pct(nativeEps, defEps)} |`);
+console.log(`| Δ native vs compat | ${pct(nativeEps, compatEps)} |`);
 
 console.log('\n---\n');
